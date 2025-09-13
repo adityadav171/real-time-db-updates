@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Order Updates</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>📦 Real-Time Order Management</h1>
+        
+        <!-- Add New Order Form -->
+        <div class="form-section">
+            <h2>Add New Order</h2>
+            <form id="orderForm">
+                <input type="text" id="customerName" placeholder="Customer Name" required>
+                <input type="text" id="productName" placeholder="Product Name" required>
+                <select id="status">
+                    <option value="pending">Pending</option>
+                    <option value="shipped">Shipped</option>
+                    <option value="delivered">Delivered</option>
+                </select>
+                <button type="submit">Add Order</button>
+            </form>
+        </div>
+        
+        <!-- Live Updates Section -->
+        <div class="updates-section">
+            <h2>🔴 Live Updates</h2>
+            <div id="liveUpdates"></div>
+        </div>
+        
+        <!-- Orders Table -->
+        <div class="orders-section">
+            <h2>All Orders</h2>
+            <table id="ordersTable">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Customer</th>
+                        <th>Product</th>
+                        <th>Status</th>
+                        <th>Updated At</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="ordersBody">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        
+        // DOM elements
+        const orderForm = document.getElementById('orderForm');
+        const liveUpdates = document.getElementById('liveUpdates');
+        const ordersBody = document.getElementById('ordersBody');
+        
+        // Load initial orders
+        async function loadOrders() {
+            try {
+                const response = await fetch('/api/orders');
+                const orders = await response.json();
+                displayOrders(orders);
+            } catch (error) {
+                console.error('Error loading orders:', error);
+            }
+        }
+        
+        // Display orders in table
+        function displayOrders(orders) {
+            ordersBody.innerHTML = '';
+            orders.forEach(order => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${order.id}</td>
+                    <td>${order.customer_name}</td>
+                    <td>${order.product_name}</td>
+                    <td><span class="status-${order.status}">${order.status}</span></td>
+                    <td>${new Date(order.updated_at).toLocaleString()}</td>
+                    <td>
+                        <button onclick="updateOrderStatus(${order.id}, '${getNextStatus(order.status)}')" 
+                                class="btn-small">
+                            → ${getNextStatus(order.status)}
+                        </button>
+                        <button onclick="deleteOrder(${order.id})" class="btn-small btn-danger">
+                            Delete
+                        </button>
+                    </td>
+                `;
+                ordersBody.appendChild(row);
+            });
+        }
+        
+        // Get next status for quick update
+        function getNextStatus(currentStatus) {
+            const statusFlow = {
+                'pending': 'shipped',
+                'shipped': 'delivered',
+                'delivered': 'pending'
+            };
+            return statusFlow[currentStatus];
+        }
+        
+        // Add live update message
+        function addLiveUpdate(message, type = 'info') {
+            const updateDiv = document.createElement('div');
+            updateDiv.className = `update-message ${type}`;
+            updateDiv.innerHTML = `
+                <span class="timestamp">${new Date().toLocaleTimeString()}</span>
+                ${message}
+            `;
+            liveUpdates.insertBefore(updateDiv, liveUpdates.firstChild);
+            
+            // Keep only last 10 updates
+            while (liveUpdates.children.length > 10) {
+                liveUpdates.removeChild(liveUpdates.lastChild);
+            }
+        }
+        
+        // Handle form submission
+        orderForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = {
+                customer_name: document.getElementById('customerName').value,
+                product_name: document.getElementById('productName').value,
+                status: document.getElementById('status').value
+            };
+            
+            try {
+                const response = await fetch('/api/orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+                
+                if (response.ok) {
+                    orderForm.reset();
+                } else {
+                    alert('Failed to create order');
+                }
+            } catch (error) {
+                console.error('Error creating order:', error);
+                alert('Error creating order');
+            }
+        });
+        
+        // Update order status
+        async function updateOrderStatus(id, newStatus) {
+            try {
+                const order = Array.from(ordersBody.children)
+                    .find(row => row.cells[0].textContent == id);
+                
+                const response = await fetch(`/api/orders/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        customer_name: order.cells[1].textContent,
+                        product_name: order.cells[2].textContent,
+                        status: newStatus
+                    })
+                });
+                
+                if (!response.ok) {
+                    alert('Failed to update order');
+                }
+            } catch (error) {
+                console.error('Error updating order:', error);
+                alert('Error updating order');
+            }
+        }
+        
+        // Delete order
+        async function deleteOrder(id) {
+            if (!confirm('Are you sure you want to delete this order?')) return;
+            
+            try {
+                const response = await fetch(`/api/orders/${id}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    alert('Failed to delete order');
+                }
+            } catch (error) {
+                console.error('Error deleting order:', error);
+                alert('Error deleting order');
+            }
+        }
+        
+        // Socket.IO event listeners
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            addLiveUpdate('🟢 Connected to real-time updates', 'success');
+        });
+        
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+            addLiveUpdate('🔴 Disconnected from real-time updates', 'error');
+        });
+        
+        socket.on('orderUpdate', (data) => {
+            console.log('Real-time update:', data);
+            
+            let message = '';
+            let type = 'info';
+            
+            switch (data.operation) {
+                case 'INSERT':
+                    message = `📦 New order created: ${data.data.customer_name} ordered ${data.data.product_name}`;
+                    type = 'success';
+                    break;
+                case 'UPDATE':
+                    message = `📝 Order #${data.data.id} updated: Status changed to ${data.data.status}`;
+                    type = 'info';
+                    break;
+                case 'DELETE':
+                    message = `🗑️ Order #${data.data.id} deleted`;
+                    type = 'warning';
+                    break;
+            }
+            
+            addLiveUpdate(message, type);
+            
+            // Reload orders to show latest data
+            loadOrders();
+        });
+        
+        // Load orders on page load
+        loadOrders();
+    </script>
+</body>
+</html>
